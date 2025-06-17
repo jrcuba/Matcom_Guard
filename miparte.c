@@ -6,8 +6,8 @@
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h> // read(), write(), close()
+#include <iphlpapi.h>
 #pragma comment(lib, "ws2_32.lib")
-#define SA struct sockaddr
 // Estructura para mapear puertos a servicios
 typedef struct
 {
@@ -40,31 +40,30 @@ const char *get_service(int port)
 
 // Metodo para saber cuantos procesos se ejecutan mientra el puerto esta abierto
 // Si un proceso tiene muchos procesos abiertos es probable q sea un puerto peligroso
-int count_processes()
+
+int count_processes(DWORD target_port)
 {
+    PMIB_TCPTABLE tcp_table = NULL;
+    DWORD size = 0;
     int count = 0;
-    HANDLE hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    PROCESSENTRY32 pe32;
 
-    if (hProcessSnap == INVALID_HANDLE_VALUE)
+    if (GetTcpTable(NULL, &size, TRUE) == ERROR_INSUFFICIENT_BUFFER)
     {
-        printf("Error al obtener la lista de procesos.\n");
-        return 1;
-    }
-
-    pe32.dwSize = sizeof(PROCESSENTRY32);
-    if (Process32First(hProcessSnap, &pe32))
-    {
-        do
+        tcp_table = (PMIB_TCPTABLE)malloc(size);
+        if (GetTcpTable(tcp_table, &size, TRUE) == NO_ERROR)
         {
-            count++;
-        } while (Process32Next(hProcessSnap, &pe32));
+            for (DWORD i = 0; i < tcp_table->dwNumEntries; i++)
+            {
+                if (ntohs(tcp_table->table[i].dwLocalPort) == target_port)
+                {
+                    count++;
+                }
+            }
+        }
+        free(tcp_table);
     }
-
-    CloseHandle(hProcessSnap);
     return count;
 }
-
 int scan_port(const char *ip, int port)
 {
     // Crear socket y verificar
@@ -72,35 +71,26 @@ int scan_port(const char *ip, int port)
     if (sock == INVALID_SOCKET)
     {
         printf("No se pudo crear el socket.\n");
-        WSACleanup();
-        return 1;
+        return -1;
     }
     struct sockaddr_in server;
-    // Configurar estructura de conexión
-    server.sin_addr.s_addr = inet_addr(ip);
-    server.sin_family = AF_INET;
-    server.sin_port = htons(port);
-    //  connect es la funcion q se usa para conectar al servidor remoto
-    //  sock es el socket q se va a usar para conectar
-    //  server es la estructura q contiene la direccion a la q se va a conectar, el cast es necesario pq el metodo requiere un puntero
-    //  el sizeof se usa para saber cuanto espacio va a ocupar la estructura server
-    //  Intentar conectar
-    /// AKI DA BERRO Y EL CONNECT ESE SE DEMORA CANTIDAD
-    printf("Ver q se puede hacer para optimizar");
+    // Configurar estructura de conexión a la q se va a conectar el socket
+    server.sin_family = AF_INET;            // IPv4
+    server.sin_addr.s_addr = inet_addr(ip); // ip en formato de red para leer a.b.c.d
+    server.sin_port = htons(port);          // Puerto en formato de red para q lo lea la computadora
 
     // Optimizacion para q cuando el puerto este cerrado se bloquee antes
     DWORD timeout = 500; // 500ms
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout));
+    int processes_before = count_processes(port); // Obtener cantidad de procesos antes de conectar con el puerto
 
     if (connect(sock, (struct sockaddr *)&server, sizeof(server)) == 0)
     {
         printf("De aqui alante no he probado");
-        int processes_before = count_processes(); // Obtener cantidad de procesos antes
         closesocket(sock);
-        WSACleanup();
-        int processes_after = count_processes(); // Obtener cantidad de procesos después
-        int difference = processes_after - processes_before;
+        int processes_after = count_processes(port); // Obtener cantidad de procesos después de conectar con el peurto
+        printf("Puerto :\d abierto y ejecuta \d procesos", port, processes_before - processes_after);
         return 1; // Puerto abierto
     }
     closesocket(sock);
@@ -174,14 +164,14 @@ int main()
     printf("Hola\n");
     printf("Escriba el ip al q se va a conectar el server\n");
     const char *target_ip = malloc(sizeof(char) * 16);
-    scanf("%s", target_ip);
-
-    printf("Escriba el puerto desde q empieza\n");
     int start_port = 80;
-    scanf("%d", &start_port);
-
-    printf("Escriba el puerto en el q termina\n");
     int end_port = 100;
+
+    printf("Ingrese la IP objetivo (ej: 192.168.1.1): \n");
+    scanf("%15s", target_ip);
+    printf("Ingrese puerto inicial (ej: 80): \n");
+    scanf("%d", &start_port);
+    printf("Ingrese puerto final (ej: 100): \n");
     scanf("%d", &end_port);
 
     if (start_port > end_port)
@@ -191,13 +181,14 @@ int main()
     }
     for (int port = start_port; port <= end_port; port++)
     {
+        int succes = scan_port(target_ip, port);
         /*         if (port <= 1024)
                 {
                     printf("El puerto \d se usa para procesos reservados del sistema no debe ser peligroso \n", port);
                     continue;
                 }
          */
-        if (!scan_port(target_ip, port))
+        if (succes)
             printf("Puerto %d está abierto\n", port);
         else
             printf("Puerto %d está cerrado\n", port);
