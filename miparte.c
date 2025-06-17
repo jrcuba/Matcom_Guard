@@ -39,7 +39,7 @@ const char *get_service(int port)
 }
 
 // Metodo para saber cuantos procesos se ejecutan mientra el puerto esta abierto
-// Si un proceso tiene muchos procesos abiertos es probable q sea un puerto
+// Si un proceso tiene muchos procesos abiertos es probable q sea un puerto peligroso
 int count_processes()
 {
     int count = 0;
@@ -49,7 +49,7 @@ int count_processes()
     if (hProcessSnap == INVALID_HANDLE_VALUE)
     {
         printf("Error al obtener la lista de procesos.\n");
-        return -1;
+        return 1;
     }
 
     pe32.dwSize = sizeof(PROCESSENTRY32);
@@ -67,25 +67,14 @@ int count_processes()
 
 int scan_port(const char *ip, int port)
 {
-
-    // Inicializar Winsock
-    WSADATA wsa;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
-    {
-        printf("Error en WSAStartup.\n");
-        return 1;
-    }
-
-    // Crear socket
-    SOCKET sock;
-    sock = socket(AF_INET, SOCK_STREAM, 0);
+    // Crear socket y verificar
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sock == INVALID_SOCKET)
     {
         printf("No se pudo crear el socket.\n");
         WSACleanup();
         return 1;
     }
-
     struct sockaddr_in server;
     // Configurar estructura de conexión
     server.sin_addr.s_addr = inet_addr(ip);
@@ -97,86 +86,94 @@ int scan_port(const char *ip, int port)
     //  el sizeof se usa para saber cuanto espacio va a ocupar la estructura server
     //  Intentar conectar
     /// AKI DA BERRO Y EL CONNECT ESE SE DEMORA CANTIDAD
+    printf("Ver q se puede hacer para optimizar");
+
+    // Optimizacion para q cuando el puerto este cerrado se bloquee antes
+    DWORD timeout = 500; // 500ms
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout));
+
     if (connect(sock, (struct sockaddr *)&server, sizeof(server)) == 0)
     {
-        printf("llego aki 8 ");
+        printf("De aqui alante no he probado");
         int processes_before = count_processes(); // Obtener cantidad de procesos antes
-        printf("llego aki 9 ");
         closesocket(sock);
-        printf("llego aki 10");
         WSACleanup();
-        printf("llego aki 11");
         int processes_after = count_processes(); // Obtener cantidad de procesos después
-        printf("llego aki 12");
         int difference = processes_after - processes_before;
-        printf("Puerto %d (%s) está abierto.\n", port, get_service(port));
-        printf("Diferencia en cantidad de procesos tras cerrar el puerto %d: %d\n", port, difference);
-        return 0; // Puerto abierto
+        return 1; // Puerto abierto
     }
     closesocket(sock);
-    WSACleanup();
     return 0; // Puerto cerrado
 }
-
-int create_server(int Port)
+/*
+int create_server(const char *ip, int Port)
 {
-    int sockfd, connfd, len;
+    int sock, connfd, len;
     struct sockaddr_in servaddr, cli;
 
-    // socket create and verification
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd == -1)
+    // Crear socket y verificar
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock != 0)
     {
         printf("socket creation failed...\n");
-        exit(0);
+        return 1;
     }
     else
         printf("Socket successfully created..\n");
     bzero(&servaddr, sizeof(servaddr));
 
-    // assign IP, PORT
+    // assignary Protocolo a usar, IP y PORT
     servaddr.sin_family = AF_INET;
     servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
     servaddr.sin_port = htons(Port);
 
     // Binding newly created socket to given IP and verification
-    if ((bind(sockfd, (SA *)&servaddr, sizeof(servaddr))) != 0)
+    if ((bind(sock, (SA *)&servaddr, sizeof(servaddr))) != 0)
     {
         printf("socket bind failed...\n");
-        exit(0);
+        return 1;
     }
     else
         printf("Socket successfully binded..\n");
 
-    // Now server is ready to listen and verification
-    if ((listen(sockfd, 5)) != 0)
+    // Aki el server esta escuchando y se puede verificar
+    if ((listen(sock, 5)) != 0)
     {
         printf("Listen failed...\n");
-        exit(0);
+        return 1;
     }
     else
         printf("Server listening..\n");
     len = sizeof(cli);
 
-    // Accept the data packet from client and verification
-    connfd = accept(sockfd, (SA *)&cli, &len);
-    if (connfd < 0)
+    // Verificando datos recibidos
+    connfd = accept(sock, (SA *)&cli, &len);
+    if (connfd != 0)
     {
         printf("server accept failed...\n");
-        exit(0);
+        return 1;
     }
     else
         printf("server accept the client...\n");
-    close(sockfd);
+
+    close(sock);
     return 0;
 }
-
+ */
 int main()
 {
+    // Inicializar Winsock
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+    {
+        printf("Error en WSAStartup.\n");
+        return 1;
+    }
+
     printf("Hola\n");
     printf("Escriba el ip al q se va a conectar el server\n");
-
-    const char *target_ip = malloc(sizeof(char) * 16); // Cambia por la IP objetivo
+    const char *target_ip = malloc(sizeof(char) * 16);
     scanf("%s", target_ip);
 
     printf("Escriba el puerto desde q empieza\n");
@@ -194,14 +191,19 @@ int main()
     }
     for (int port = start_port; port <= end_port; port++)
     {
-        if (scan_port(target_ip, port))
-        {
+        /*         if (port <= 1024)
+                {
+                    printf("El puerto \d se usa para procesos reservados del sistema no debe ser peligroso \n", port);
+                    continue;
+                }
+         */
+        if (!scan_port(target_ip, port))
             printf("Puerto %d está abierto\n", port);
-        }
         else
-        {
             printf("Puerto %d está cerrado\n", port);
-        }
     }
+
+    printf("Termino de ejecutarse la consulta a los puertos\n");
+    WSACleanup();
     return 0;
 }
