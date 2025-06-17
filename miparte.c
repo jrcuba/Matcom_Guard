@@ -90,7 +90,7 @@ int scan_port(const char *ip, int port)
         printf("De aqui alante no he probado");
         closesocket(sock);
         int processes_after = count_processes(port); // Obtener cantidad de procesos después de conectar con el peurto
-        printf("Puerto :\d abierto y ejecuta \d procesos", port, processes_before - processes_after);
+        printf("Puerto :%d abierto y ejecuta %d procesos", port, processes_before - processes_after);
         return 1; // Puerto abierto
     }
     closesocket(sock);
