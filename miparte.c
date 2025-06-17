@@ -68,7 +68,7 @@ int scan_port(const char *ip, int port)
         printf("No se pudo crear el socket.\n");
         return -1;
     }
-    struct sockaddr_in server;
+    struct sockaddr_in server = {0};
     // Configurar estructura de conexión a la q se va a conectar el socket
     server.sin_family = AF_INET;            // IPv4
     server.sin_addr.s_addr = inet_addr(ip); // ip en formato de red para leer a.b.c.d
@@ -96,6 +96,8 @@ int scan_port(const char *ip, int port)
 
 int main()
 {
+    const char *local_ip = "127.0.0.1";
+    int essential_ports[] = {135, 445, 5357};
     // Inicializar Winsock
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
