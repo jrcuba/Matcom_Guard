@@ -1,93 +1,39 @@
+#include <process.h>
 #include <winsock2.h>
 #include <windows.h>
 #include <ws2tcpip.h>
 #include <stdio.h>
 #include <stdlib.h>
 #pragma comment(lib, "ws2_32.lib")
+HANDLE ghMutex;
 int puertos_seguros = 0;
-/*
-//
-// Metodo para saber cuantos procesos se ejecutan mientra el puerto esta abierto
-// Si un proceso tiene muchos procesos abiertos es probable q sea un puerto peligroso
+int total_active_ports = 0;
 
-int scan_port(int port)
+typedef struct
 {
-    // Crear socket y verificar
-    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (sock == INVALID_SOCKET)
-    {
-        printf("No se pudo crear el socket.\n");
-        return 0;
-    }
+    int Port;
+    int *array;
+    int MinPort;
+    int Posc;
+} ScanParams;
 
-    // Configurar estructura de conexión a la q se va a conectar el socket
-    struct sockaddr_in server = {0};
-    server.sin_family = AF_INET;                     // IPv4
-    server.sin_addr.s_addr = inet_addr("127.0.0.1"); // ip en formato de red para leer a.b.c.d
-    server.sin_port = htons(80);                     // Puerto en formato de red para q lo lea la computadora
-
-    // Optimizacion para q cuando el puerto este cerrado se bloquee antes
-    DWORD timeout = 1000; // 1seg
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
-    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout));
-
-    //   modo no bloqueante para permitir multiple conexion
-    //   u_long modoNoBloqueante = 1;
-    //   ioctlsocket(sock, FIONBIO, &modoNoBloqueante);
-
-    if (connect(sock, (struct sockaddr *)&server, sizeof(server)) == SOCKET_ERROR)
-    {
-        int err = WSAGetLastError();
-        printf("Error code: %d\n", err);
-        closesocket(sock);
-        printf("Puerto %d: CERRADO\n", port);
-        return 0; // Puerto cerrado
-    }
-
-    printf("De aqui alante no he probado\n");
-    printf("Puerto %d: ABIERTO\n", port);
-    get_service(port);
-    closesocket(sock);
-    return 1; // Puerto abierto
-}
-
-int main()
-{
-    int essential_ports[] = {135, 445, 5357};
-    // Inicializar Winsock
-    WSADATA wsa;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
-    {
-        printf("Error en WSAStartup.\n");
-        return 1;
-    }
-
-    printf("Empieza el escaner\n");
-    int start_port = 80;
-    int end_port = 100;
-    printf("Ingrese puerto inicial (ej: 80): \n");
-    scanf("%d", &start_port);
-    printf("Ingrese puerto final (ej: 100): \n");
-    scanf("%d", &end_port);
-
-    int total_abierto = 0;
-    for (int port = start_port; port <= end_port; port++)
-    {
-        total_abierto += scan_port(port);
-    }
-
-    printf("Termino de ejecutarse la consulta a los puertos\n");
-    WSACleanup();
-    return 0;
-}
- */
-
-// Estructura para mapear puertos a servicios
 typedef struct
 {
     int port;
     const char *service;
 } PortService;
+
+/*
+  // Configurar estructura de conexión a la q se va a conectar el socket
+    struct sockaddr_in server = {0};
+    server.sin_family = AF_INET;                     // IPv4
+    server.sin_addr.s_addr = inet_addr("127.0.0.1"); // ip en formato de red para leer a.b.c.d
+    server.sin_port = htons(80);                     // Puerto en formato de red para q lo lea la computadora
+
+    //   modo no bloqueante para permitir multiple conexion
+    //   u_long modoNoBloqueante = 1;
+    //   ioctlsocket(sock, FIONBIO, &modoNoBloqueante);
+ */
 
 // Lista de puertos comunes y sus servicios
 PortService port_services[] = {
@@ -358,15 +304,17 @@ const void get_service(int port)
     for (int i = 0; i < (int)(sizeof(port_services) / sizeof(port_services[0])); i++)
         if (port_services[i].port == port)
         {
+            WaitForSingleObject(ghMutex, INFINITE);
             printf("Servicio asociado al puerto %d : %s \n", port, port_services[i].service);
             puertos_seguros++;
+            ReleaseMutex(ghMutex); // Desbloquear mutex
             return;
         }
-    printf("Servicio asociado al puerto desconocido, potencialmente peligroso");
-    return;
+    printf("Servicio asociado al puerto %d : desconocido, potencialmente peligroso\n", port);
+    ReleaseMutex(ghMutex); // Desbloquear mutex
 }
 
-int ScanPort(int port)
+int ScanPort(ScanParams scan)
 {
     int resulta = 0;
     char host[256];
@@ -379,55 +327,72 @@ int ScanPort(int port)
     hints.ai_protocol = IPPROTO_TCP;
 
     char portstr[6];
-    snprintf(portstr, sizeof(portstr), "%d", port);
+    snprintf(portstr, sizeof(portstr), "%d", scan.Port);
 
     if (getaddrinfo(host, portstr, &hints, &result) != 0)
-        printf("Error resolviendo direccion para el puerto %d\n", port);
+        printf("Error resolviendo direccion para el puerto %d\n", scan.Port);
 
     SOCKET sock = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
     if (sock == INVALID_SOCKET)
-        printf("Error creando socket para el puerto %d: %d\n", port, WSAGetLastError());
+        printf("Error creando socket para el puerto %d: %d\n", scan.Port, WSAGetLastError());
 
     // Optimizacion para q cuando el puerto este cerrado se bloquee antes
-    DWORD timeout = 50; // 1seg
+    DWORD timeout = 50; // 50ms
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout));
 
     int connectionResult = connect(sock, result->ai_addr, (int)result->ai_addrlen);
     if (connectionResult == SOCKET_ERROR)
     {
+        WaitForSingleObject(ghMutex, INFINITE);
         int error = WSAGetLastError();
+        scan.array[scan.Posc] = 0;
+        ReleaseMutex(ghMutex); // Desbloquear mutex
+        printf("No voy a marcar el puerto este -> %d en la poscion esta -> %d\n", scan.Port, scan.Posc);
+        return -1;
         switch (error)
         {
         case WSAETIMEDOUT:
-            printf("Puerto %d: TIMEOUT (filtrado)\n", port);
+            printf("Puerto %d: TIMEOUT (filtrado)\n", scan.Port);
             break;
 
         case WSAECONNREFUSED:
-            printf("Puerto %d: CERRADO, error : %d \n", port, WSAGetLastError());
+            printf("Puerto %d: CERRADO, error : %d \n", scan.Port, WSAGetLastError());
             break;
 
         default:
-            printf("Puerto %d: Error %d\n", port, error);
+            printf("Puerto %d: Error %d\n", scan.Port, error);
             break;
         }
     }
     else
     {
-        printf("Puerto %d: ABIERTO\n", port);
-        get_service(port);
-        resulta++;
+        printf("Voy a marcar el puerto este -> %d en la poscion esta -> %d\n", scan.Port, scan.Posc);
+        WaitForSingleObject(ghMutex, INFINITE);
+        scan.array[scan.Posc] = 1;
+        total_active_ports++;
+        ReleaseMutex(ghMutex);
     }
 
     //  Liberar recursos
     closesocket(sock);
     freeaddrinfo(result);
-    return resulta;
+    return 0;
 }
+
+void scan_thread(void *param)
+{
+    ScanParams port = *(ScanParams *)param;
+    ScanPort(port);
+    free(param);
+}
+
 int main()
 {
-    int start_port = 130, end_port = 135, total_active_ports = 0;
+    int start_port = 1, end_port = 1024;
     puertos_seguros = 0;
+    total_active_ports = 0;
+
     // Inicializar Winsock
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
@@ -435,22 +400,56 @@ int main()
         printf("Error inicializando Winsock : %d\n", WSAGetLastError());
         return 1;
     }
-    /*     printf("Empieza el escaner\n");
+
+    /*
+        printf("Empieza el escaner\n");
         printf("Ingrese puerto inicial (ej: 80): \n");
         scanf("%d", &start_port);
         printf("Ingrese puerto final (ej: 100): \n");
         scanf("%d", &end_port);
-     */
-    for (int port = start_port; port <= end_port; port++)
-        total_active_ports += ScanPort(port);
+        */
 
-    printf("Total de puertos escaneados : %d\n", end_port - start_port);
+    ghMutex = CreateMutex(NULL, FALSE, NULL);
+    if (ghMutex == NULL)
+    {
+        printf("Error al crear el mutex\n");
+        WSACleanup();
+        return -1;
+    }
+
+    int *orden = malloc((end_port - start_port + 1) * sizeof(int));
+    HANDLE *hThreads = malloc((end_port - start_port + 2) * sizeof(HANDLE));
+    for (int port = start_port, i = 1; port <= end_port; port++, i++)
+    {
+        ScanParams *scan = malloc(sizeof(ScanParams));
+        scan->Port = port;
+        scan->MinPort = start_port;
+        scan->array = orden;
+        scan->Posc = i;
+        hThreads[i] = (HANDLE)_beginthread(scan_thread, 0, scan);
+        if (hThreads[i] == NULL)
+        {
+            printf("Error al crear hilo para puerto %d\n", port);
+            free(scan);
+        }
+    }
+    WaitForMultipleObjects(end_port - start_port + 1, hThreads, TRUE, INFINITE);
+
+    for (int i = 1, port = start_port; i < sizeof(orden) / sizeof(orden[0]); i++, port++)
+        if (orden[i])
+            get_service(port);
+
+    printf("Tota de puertos escaneados : %d\n", end_port - start_port);
     printf("Total de puertos abiertos : %d\n", total_active_ports);
     printf("Total de puertos cerrados : %d\n", end_port - start_port - total_active_ports);
     printf("Puertos potencialmente seguros : %d\n", puertos_seguros);
     printf("Puertos potencialmente comprometidos : %d\n", total_active_ports - puertos_seguros);
-    WSACleanup();
 
-    system("netstat -an | findstr \"LISTENING\"");
+    // system("netstat -an | findstr \"LISTENING\"");
+
+    free(orden);
+    free(hThreads);
+    CloseHandle(ghMutex);
+    WSACleanup();
     return 0;
 }
