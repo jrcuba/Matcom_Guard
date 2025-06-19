@@ -1,5 +1,5 @@
-
 #include <winsock2.h>
+#include <windows.h>
 #include <ws2tcpip.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -388,7 +388,7 @@ int ScanPort(int port)
     if (sock == INVALID_SOCKET)
         printf("Error creando socket para el puerto %d: %d\n", port, WSAGetLastError());
 
-        // Optimizacion para q cuando el puerto este cerrado se bloquee antes
+    // Optimizacion para q cuando el puerto este cerrado se bloquee antes
     DWORD timeout = 50; // 1seg
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout, sizeof(timeout));
@@ -450,5 +450,7 @@ int main()
     printf("Puertos potencialmente seguros : %d\n", puertos_seguros);
     printf("Puertos potencialmente comprometidos : %d\n", total_active_ports - puertos_seguros);
     WSACleanup();
+
+    system("netstat -an | findstr \"LISTENING\"");
     return 0;
 }
